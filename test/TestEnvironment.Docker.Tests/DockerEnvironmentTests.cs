@@ -5,7 +5,6 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text;
-using System.Threading;
 using System.Threading.Tasks;
 using Confluent.Kafka;
 using FluentFTP;
@@ -29,6 +28,7 @@ using TestEnvironment.Docker.Containers.Mssql;
 using TestEnvironment.Docker.Containers.Postgres;
 using TestEnvironment.Docker.Containers.RabbitMQ;
 using TestEnvironment.Docker.Containers.Redis;
+using TestEnvironment.Docker.Containers.SqlEdge;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -578,6 +578,51 @@ namespace TestEnvironment.Docker.Tests
             // _testOutput.WriteLine($"Exec output mongosh: {mongoshres}");
         }
 
+        [Fact]
+        public async Task AddSqlEdgeContainer_WhenContainerIsUp_ShouldPrintSqlEdgeVersion()
+        {
+            // Arrange
+#if DEBUG
+            var environment = new DockerEnvironmentBuilder(_logger)
+#else
+            await using var environment = new DockerEnvironmentBuilder(_logger)
+#endif
+                .SetName("test-env")
+#if WSL2
+                .UseWsl2()
+#endif
+#if DEBUG
+                .AddSqlEdgeContainer(p => p with
+                {
+                    Name = "my-SqlEdge",
+                    SAPassword = "HelloK11tt_0",
+                    EnvironmentVariables = new Dictionary<string, string>
+                    {
+                        ["MSSQL_COLLATION"] = "SQL_Latin1_General_CP1_CS_AS"
+                    },
+                    Reusable = true
+                })
+#else
+                .AddSqlEdgeContainer(p => p with
+                {
+                    Name = "my-SqlEdge",
+                    SAPassword = "HelloK11tt_0",
+                    EnvironmentVariables = new Dictionary<string, string>
+                    {
+                        ["MSSQL_COLLATION"] = "SQL_Latin1_General_CP1_CS_AS"
+                    }
+                })
+#endif
+                .Build();
+
+            // Act
+            await environment.UpAsync();
+
+            // Assert
+            var sqlEdge = environment.GetContainer<SqlEdgeContainer>("my-SqlEdge");
+            await PrintSqlEdgeVersion(sqlEdge);
+        }
+
         private async Task PrintMssqlVersion(MssqlContainer mssql)
         {
             using (var connection = new SqlConnection(mssql.GetConnectionString()))
@@ -590,6 +635,19 @@ namespace TestEnvironment.Docker.Tests
 
                 _testOutput.WriteLine($"MSSQL Version: {reader.GetString(0)}");
             }
+        }
+
+        private async Task PrintSqlEdgeVersion(SqlEdgeContainer mssql)
+        {
+            await using var connection = new SqlConnection(mssql.GetConnectionString());
+            await using var command = new SqlCommand("SELECT @@VERSION", connection);
+
+            await connection.OpenAsync();
+
+            var reader = await command.ExecuteReaderAsync();
+            await reader.ReadAsync();
+
+            _testOutput.WriteLine($"SqlEdge Version: {reader.GetString(0)}");
         }
 
         private async Task PrintRedisStats(RedisContainer redis)
