@@ -65,10 +65,14 @@ namespace TestEnvironment.Docker.ContainerOperations
             _logger?.LogInformation($"Container '{name}' has been run.");
             _logger?.LogDebug($"Container state: {startedContainer.State}");
             _logger?.LogDebug($"Container status: {startedContainer.Status}");
-            _logger?.LogDebug(
-                $"Container IPAddress: {startedContainer.NetworkSettings.Networks.FirstOrDefault().Key} - {startedContainer.NetworkSettings.Networks.FirstOrDefault().Value.IPAddress}");
 
-            var ipAddress = startedContainer.NetworkSettings.Networks.FirstOrDefault().Value.IPAddress;
+            string ipAddress =
+                !string.IsNullOrEmpty(containerParameters.NetworkName)
+                    ? startedContainer.NetworkSettings.Networks.FirstOrDefault(n => n.Key.Equals(containerParameters.NetworkName)).Value.IPAddress
+                    : startedContainer.NetworkSettings.Networks.FirstOrDefault().Value.IPAddress;
+            _logger?.LogDebug(
+                $"Container IPAddress: {startedContainer.NetworkSettings.Networks.FirstOrDefault().Key} - {ipAddress}");
+
             var ports = startedContainer.Ports.DistinctBy(p => p.PrivatePort).ToDictionary(p => p.PrivatePort, p => p.PublicPort);
 
             return new(startedContainer.ID, ipAddress, ports);
@@ -112,6 +116,31 @@ namespace TestEnvironment.Docker.ContainerOperations
             var createParams = GetCreateContainerParameters(containerParameters);
 
             var containerInstance = await _dockerClient.Containers.CreateContainerAsync(createParams, cancellationToken);
+
+            // Check the network for container and attach to specified network if needed
+            if (!string.IsNullOrEmpty(containerParameters.NetworkName))
+            {
+                var network = await _dockerClient.Networks
+                    .ListNetworksAsync(
+                        new NetworksListParameters
+                        {
+                            Filters = new Dictionary<string, IDictionary<string, bool>> { { "name", new Dictionary<string, bool> { { containerParameters.NetworkName, true } } } }
+                        },
+                        cancellationToken);
+
+                string networkId;
+                if (network == null || !network.Any())
+                {
+                    var createdNetwork = await _dockerClient.Networks.CreateNetworkAsync(new NetworksCreateParameters { Name = containerParameters.NetworkName }, cancellationToken);
+                    networkId = createdNetwork.ID;
+                }
+                else
+                {
+                    networkId = network.First().ID;
+                }
+
+                await _dockerClient.Networks.ConnectNetworkAsync(networkId, new NetworkConnectParameters { Container = containerInstance.ID }, cancellationToken);
+            }
 
             // Run container
             await _dockerClient.Containers.StartContainerAsync(containerInstance.ID, new ContainerStartParameters(), cancellationToken);
